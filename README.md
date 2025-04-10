@@ -66,3 +66,20 @@ Reads data from the buffer without consuming it (FIFO ordering).
 #### `ssize_t cbuf_remove(cbuf_t *cbuf, size_t nbytes)`
 Removes (consumes) data from the buffer without reading it.
 - Returns the number of bytes removed, or -1 for invalid arguments
+
+## Run tests
+
+Build and run tests using CMake:
+
+```zsh
+git clone https://github.com/vibhav950/cbuf.git
+cd cbuf
+mkdir build && cd build
+cmake ..
+make
+ctest -V
+```
+
+## License
+
+This project is licensed under Unlicense.
