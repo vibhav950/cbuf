@@ -34,6 +34,8 @@ int cbuf_init(cbuf_t *cbuf, size_t capacity) {
  * @param[in] cbuf The cbuf to free
  *
  * @brief Free the memory allocated for @p cbuf.
+ *
+ * @note Not thread safe!
  */
 void cbuf_free(cbuf_t *cbuf) {
   if (!cbuf)
@@ -61,7 +63,10 @@ void cbuf_free(cbuf_t *cbuf) {
  * - To release this buffer for external use again, use `cbuf_release()`.
  */
 int cbuf_make(cbuf_t *cbuf, uint8_t *buf, size_t len) {
-  if (!cbuf || !buf || (len < CBUF_MIN_CAPACITY) || (len > CBUF_MAX_CAPACITY))
+  if (!cbuf || !buf)
+    return -1;
+
+  if ((len < CBUF_MIN_CAPACITY) || (len > CBUF_MAX_CAPACITY))
     return -1;
 
   cbuf->buf = buf;
@@ -86,6 +91,8 @@ int cbuf_make(cbuf_t *cbuf, uint8_t *buf, size_t len) {
  * - The caller is responsible for freeing (if necessary) this buffer.
  *
  * - This @p cbuf CANNOT be used before calling `cbuf_make()` or `cbuf_init()`.
+ *
+ * @note Not thread safe!
  */
 size_t cbuf_release(cbuf_t *cbuf, uint8_t **buf) {
   size_t capacity;
@@ -124,6 +131,9 @@ size_t cbuf_get_capacity(cbuf_t *cbuf) {
  * -1 for invalid arguments.
  *
  * @brief Check if the buffer is empty.
+ *
+ * @note The result might be stale/inaccurate due to the concurrent nature of
+ * this cbuf.
  */
 int cbuf_is_empty(cbuf_t *cbuf) {
   uint8_t *readp, *writep;
@@ -131,8 +141,8 @@ int cbuf_is_empty(cbuf_t *cbuf) {
   if (unlikely(!cbuf))
     return -1;
 
-  readp = atomic_load_explicit(&cbuf->readp, memory_order_acquire);
-  writep = atomic_load_explicit(&cbuf->writep, memory_order_acquire);
+  readp = atomic_load(&cbuf->readp);
+  writep = atomic_load(&cbuf->writep);
 
   return readp == writep;
 }
@@ -144,6 +154,9 @@ int cbuf_is_empty(cbuf_t *cbuf) {
  * -1 for invalid arguments.
  *
  * @brief Check if the buffer is full.
+ *
+ * @note The result might be stale/inaccurate due to the concurrent nature of
+ * this cbuf.
  */
 int cbuf_is_full(cbuf_t *cbuf) {
   uint8_t *writep, *readp;
@@ -152,8 +165,8 @@ int cbuf_is_full(cbuf_t *cbuf) {
   if (unlikely(!cbuf))
     return -1;
 
-  readp = atomic_load_explicit(&cbuf->readp, memory_order_acquire);
-  writep = atomic_load_explicit(&cbuf->writep, memory_order_acquire);
+  readp = atomic_load(&cbuf->readp);
+  writep = atomic_load(&cbuf->writep);
 
   if (readp <= writep)
     offs = writep - readp;
@@ -191,28 +204,28 @@ ssize_t cbuf_get_readable_size(cbuf_t *cbuf) {
  * @param[in] cbuf An initialized cbuf instance. See `cbuf_init()` and
  * `cbuf_make()`.
  * @param[in] nbytes The number of bytes that must become readable.
- * @param[in] timeout_usec The wait timeout (in microseconds).
+ * @param[in] timeout_msec The wait timeout (in milliseconds).
  * @return >0 if @p nbytes are readable, 0 if the timeout expired,
  * -1 for invalid arguments.
  *
- * @brief Wait for at most @p timeout_usec us for @p nbytes to become readable
+ * @brief Wait for at most @p timeout_msec ms for @p nbytes to become readable
  * in @p cbuf.
  *
- * The following values of @p timeout_usec are special:
+ * The following values of @p timeout_msec are special:
  *
  * - `0`: return immediately
  *
  * - `-1`: wait indefinitely
  */
-int cbuf_waitfor_readable(cbuf_t *cbuf, size_t nbytes, int64_t timeout_usec) {
+int cbuf_waitfor_readable(cbuf_t *cbuf, size_t nbytes, int64_t timeout_msec) {
   cbuf_timeout_t timeout;
-  // 800ns sleep
-  const struct timespec sleep_timeout = {.tv_sec = 0, .tv_nsec = 800};
+  /* 32x pauses, 64x pauses x 32 */
+  int pause = 32, pause32 = 64;
 
   if (!cbuf || !nbytes)
     return -1;
 
-  cbuf_timeout_begin(&timeout, timeout_usec);
+  cbuf_timeout_begin(&timeout, timeout_msec);
   for (;;) {
     if (cbuf_get_readable_size(cbuf) >= nbytes)
       return 1;
@@ -220,7 +233,7 @@ int cbuf_waitfor_readable(cbuf_t *cbuf, size_t nbytes, int64_t timeout_usec) {
     if (cbuf_timeout_expired(&timeout))
       return 0;
 
-    clock_nanosleep(CLOCK_MONOTONIC, 0, &sleep_timeout, NULL);
+    decaying_sleep(pause, pause32);
   }
 }
 
@@ -229,28 +242,28 @@ int cbuf_waitfor_readable(cbuf_t *cbuf, size_t nbytes, int64_t timeout_usec) {
  * `cbuf_make()`.
  * @param[in] buf The buffer to write.
  * @param[in] nbytes The maximum number of bytes to write.
- * @param[in] timeout_usec The wait timeout (in microseconds).
+ * @param[in] timeout_msec The wait timeout (in milliseconds).
  * @return The number of bytes written, or -1 for invalid arguments.
  *
  * @brief Lock-free blocking write for this SPSC @p cbuf.
  * This function will block using busy-waiting until some space becomes
- * available or @p timeout_usec us have elapsed. Once any amount of free space
+ * available or @p timeout_msec ms have elapsed. Once any amount of free space
  * is available to write, the function writes as much as possible and returns
  * the number of bytes written.
  *
- * The following values of @p timeout_usec are special:
+ * The following values of @p timeout_msec are special:
  *
  * - `0`: return immediately
  *
  * - `-1`: wait indefinitely
  */
 ssize_t cbuf_write_blocking(cbuf_t *cbuf, const uint8_t *buf, size_t nbytes,
-                            int64_t timeout_usec) {
+                            int64_t timeout_msec) {
   uint8_t *writep, *readp;
   ssize_t capacity, nwrite, len, rem;
   cbuf_timeout_t timeout;
-  // 800ns sleep
-  const struct timespec sleep_timeout = {.tv_sec = 0, .tv_nsec = 800};
+  /* 32x pauses, 64x pauses x 32 */
+  int pause = 32, pause32 = 64;
 
   if (!cbuf || !buf || (nbytes > cbuf->capacity))
     return -1;
@@ -258,10 +271,10 @@ ssize_t cbuf_write_blocking(cbuf_t *cbuf, const uint8_t *buf, size_t nbytes,
   capacity = cbuf->capacity;
 
   /* Start the timeout and spin until there is space to write */
-  cbuf_timeout_begin(&timeout, timeout_usec);
+  cbuf_timeout_begin(&timeout, timeout_msec);
   for (;;) {
     readp = atomic_load_explicit(&cbuf->readp, memory_order_acquire);
-    /* Since only the writer updates writep, a plain load is OK */
+    /* Since only the writer updates writep, a relaxed load is OK */
     writep = atomic_load_explicit(&cbuf->writep, memory_order_relaxed);
 
     /**
@@ -285,7 +298,7 @@ ssize_t cbuf_write_blocking(cbuf_t *cbuf, const uint8_t *buf, size_t nbytes,
     if (cbuf_timeout_expired(&timeout))
       return 0; /* timed out with no free space */
 
-    clock_nanosleep(CLOCK_MONOTONIC, 0, &sleep_timeout, NULL);
+    decaying_sleep(pause, pause32);
   }
 
   nwrite = MIN(nbytes, nwrite);
@@ -315,36 +328,36 @@ ssize_t cbuf_write_blocking(cbuf_t *cbuf, const uint8_t *buf, size_t nbytes,
  * `cbuf_make()`.
  * @param[out] buf The buffer to read into.
  * @param[in] nbytes The maximum number of bytes to read.
- * @param[in] timeout_usec The wait timeout (in microseconds).
+ * @param[in] timeout_msec The wait timeout (in milliseconds).
  * @param[in] all Enforce all-or-nothing behaviour.
  * @return The number of bytes read into @p buf, or -1 for invalid arguments.
  *
  * @brief Lock-free blocking read for this SPSC @p cbuf. This function will
- * block for at most @p timeout_usec us using busy-waiting until @p nbytes are
+ * block for at most @p timeout_msec ms using busy-waiting until @p nbytes are
  * readable. Data is read with FIFO ordering.
  *
  * - If @p all is set to `true`, the function will read exactly @p nbytes bytes
- * from @p cbuf. If there are not enough bytest to read, the function returns 0;
+ * from @p cbuf. If there are not enough bytes to read, the function returns 0;
  * Otherwise, it returns @p nbytes.
  *
  * - If @p all is set to `false`, the function will wait no longer than
- * @p timeout_usec us until @p nbytes are available to read. If the timeout
+ * @p timeout_msec ms until @p nbytes are available to read. If the timeout
  * expires before the data becomes available, the function reads whatever bytes
  * are available and returns the number of bytes read.
  *
- * The following values of @p timeout_usec are special:
+ * The following values of @p timeout_msec are special:
  *
  * - `0`: return immediately
  *
  * - `-1`: wait indefinitely
  */
 ssize_t cbuf_read_blocking(cbuf_t *cbuf, uint8_t *buf, size_t nbytes,
-                           int64_t timeout_usec, bool all) {
+                           int64_t timeout_msec, bool all) {
   uint8_t *writep, *readp;
   ssize_t capacity, nread, len, rem;
   cbuf_timeout_t timeout;
-  // 800ns sleep
-  const struct timespec sleep_timeout = {.tv_sec = 0, .tv_nsec = 800};
+  /* 32x pauses, 64x pauses x 32 */
+  int pause = 32, pause32 = 64;
 
   if (!cbuf || !buf || (nbytes > cbuf->capacity))
     return -1;
@@ -352,9 +365,9 @@ ssize_t cbuf_read_blocking(cbuf_t *cbuf, uint8_t *buf, size_t nbytes,
   capacity = cbuf->capacity;
 
   /* spinlock */
-  cbuf_timeout_begin(&timeout, timeout_usec);
+  cbuf_timeout_begin(&timeout, timeout_msec);
   for (;;) {
-    readp = atomic_load_explicit(&cbuf->readp, memory_order_acquire);
+    readp = atomic_load_explicit(&cbuf->readp, memory_order_relaxed);
     writep = atomic_load_explicit(&cbuf->writep, memory_order_acquire);
 
     /* empty condition => readp == writep */
@@ -369,7 +382,7 @@ ssize_t cbuf_read_blocking(cbuf_t *cbuf, uint8_t *buf, size_t nbytes,
     if (cbuf_timeout_expired(&timeout))
       break;
 
-    clock_nanosleep(CLOCK_MONOTONIC, 0, &sleep_timeout, NULL);
+    decaying_sleep(pause, pause32);
   }
 
   if (nread <= 0)
@@ -417,7 +430,7 @@ ssize_t cbuf_peek(cbuf_t *cbuf, uint8_t *buf, size_t nbytes) {
     return -1;
 
   capacity = cbuf->capacity;
-  readp = atomic_load_explicit(&cbuf->readp, memory_order_acquire);
+  readp = atomic_load_explicit(&cbuf->readp, memory_order_relaxed);
   writep = atomic_load_explicit(&cbuf->writep, memory_order_acquire);
 
   if (readp <= writep)
@@ -452,7 +465,7 @@ ssize_t cbuf_remove(cbuf_t *cbuf, size_t nbytes) {
   if (!cbuf)
     return -1;
 
-  readp = atomic_load_explicit(&cbuf->readp, memory_order_acquire);
+  readp = atomic_load_explicit(&cbuf->readp, memory_order_relaxed);
   writep = atomic_load_explicit(&cbuf->writep, memory_order_acquire);
 
   n = MIN(cbuf_get_readable_size(cbuf), nbytes);

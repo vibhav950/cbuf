@@ -39,7 +39,7 @@ void *consumer_thread(void *arg) {
       for (size_t j = 0; j < ctx->item_size; j++) {
         if (data[j] != ((i + j) & 0xFF)) {
           data_valid = false;
-          printf("Consumer: Data mismatch at item %zu, byte %zu: expected %d, "
+          printf("Consumer: Data mismatch at item %zu, byte %zu: expected %zu, "
                  "got %d\n",
                  i, j, (i + j) & 0xFF, data[j]);
           break;

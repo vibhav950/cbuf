@@ -2,36 +2,84 @@
 
 #include "defs.h"
 
-#include <sys/time.h>
+#if defined(__linux__)
 #include <time.h>
+#elif defined(_WIN32)
+#include <Windows.h>
+#error "unknown platform"
+#endif
 
 typedef struct cbuf_timeout_st {
-  struct timeval begin;
-  int64_t expire_in_usec;
+  int64_t begin;          /* timeout begin (ms) */
+  int64_t expire_in_msec; /* milliseconds till expiry */
 } cbuf_timeout_t;
 
-static inline __attribute__((always_inline)) void
-cbuf_timeout_begin(cbuf_timeout_t *timeout, int64_t expire_in_usec) {
+#ifdef DEBUG
+/**[DEBUG]
+ * Runtime platform check for a monotonically increasing high-resolution clock.
+ */
+void have_highres_mono_clock(void) {
+#ifdef __linux__
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    exit(EXIT_FAILURE);
+#else /* _MSC_VER */
+  LARGE_INTEGER foo;
+  if ((QueryPerformanceCounter(&foo) == 0) ||
+      (QueryPerformanceFrequency(&foo) == 0)) {
+    exit(EXIT_FAILURE);
+  }
+#endif
+}
+#endif /* DEBUG */
+
+/**
+ * cbuf_time_now()
+ * @brief Get current time in milleseconds.
+ */
+
+#ifdef __linux__
+#define cbuf_time_now()                                                        \
+  ({                                                                           \
+    struct timespec ts;                                                        \
+    (void)clock_gettime(CLOCK_MONOTONIC, &ts);                                 \
+    int64_t diff = (int64_t)ts.tv_sec*1000 + ts.tv_nsec/1000000;               \
+    (diff);                                                                    \
+  })
+#else /* _MSC_VER */
+#define cbuf_time_now()                                                        \
+  ({                                                                           \
+    LARGE_INTEGER now, freq;                                                   \
+    (void)QueryPerformanceFrequency(&freq);                                    \
+    (void)QueryPerformanceCounter(&now);                                       \
+    int64_t diff = (1000LL * now.QuadPart) / freq.QuadPart;                    \
+    (diff);                                                                    \
+  })
+#endif
+
+/**
+ * cbuf_time_diff(new, old)
+ *
+ * @brief Get time elapsed in milliseconds since @p old up until @p new.
+ */
+
+#define cbuf_time_diff(new, old) ((new) - (old))
+
+INLINE
+void cbuf_timeout_begin(cbuf_timeout_t *timeout, int64_t expire_in_msec) {
   if (likely(timeout)) {
-    gettimeofday(&timeout->begin, NULL);
-    timeout->expire_in_usec = expire_in_usec;
+    timeout->begin = cbuf_time_now();
+    timeout->expire_in_msec = expire_in_msec;
   }
 }
 
-static inline __attribute__((always_inline)) bool
-cbuf_timeout_expired(cbuf_timeout_t *timeout) {
-  struct timeval now, begin = timeout->begin;
+INLINE bool cbuf_timeout_expired(cbuf_timeout_t *timeout) {
+  uint64_t now;
   if (likely(timeout)) {
-    if (timeout->expire_in_usec < 0)
+    if (timeout->expire_in_msec < 0)
       return false;
-
-    gettimeofday(&now, NULL);
-    int64_t diff = ((int64_t)now.tv_sec - begin.tv_sec)*1000000 +
-                   (now.tv_usec - begin.tv_usec);
-    if (diff >= timeout->expire_in_usec)
-      return true;
-    else
-      return false;
+    now = cbuf_time_now();
+    return cbuf_time_diff(now, timeout->begin) >= timeout->expire_in_msec;
   }
   return true;
 }
