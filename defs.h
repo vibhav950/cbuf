@@ -13,6 +13,8 @@
 #include <sched.h> // sched_yield()
 #elif defined(_WIN32)
 #include <Windows.h> // SwitchToThread()
+#include <intrin.h>  // _mm_pause()
+#pragma intrinsic(_mm_pause)
 #else
 #error "unknown platform"
 #endif
@@ -43,18 +45,15 @@
      (defined(__i386__) || defined(__x86_64__))) ||                            \
     (__has_builtin(__builtin_ia32_pause))
 #define spin_pause() __builtin_ia32_pause()
-#elif defined(__x86_64__) || defined(__i386__)
+#elif defined(__x86_64__) || defined(__i386__) || defined(__amd64__) ||        \
+    defined(_M_X64) || defined(_M_IX86)
 #if defined(_MSC_VER)
-/*
-#include <intrin.h>
-#pragma intrinsic(_mm_pause())
 #define spin_pause() _mm_pause()
-*/
-#define spin_pause() __asm volatile("pause")
 #else
 #define spin_pause()                                                           \
   do {                                                                         \
-    __asm__ volatile("pause\n" ::: "memory");                                  \
+    __asm__ volatile("pause");                                                 \
+    __asm__ volatile("" ::: "memory");                                         \
   } while (0)
 #endif
 #else

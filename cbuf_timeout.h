@@ -6,6 +6,7 @@
 #include <time.h>
 #elif defined(_WIN32)
 #include <Windows.h>
+#else
 #error "unknown platform"
 #endif
 
