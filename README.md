@@ -2,6 +2,8 @@
 
 This implementation is thread-safe for a single producer and single consumer.
 
+[![Static Badge](https://img.shields.io/badge/Unlicense-blue?style=plastic&logo=unlicense&logoColor=white&logoSize=auto&label=license&labelColor=grey&color=blue)](https://github.com/vibhav950/cbuf/blob/main/LICENSE) ![Static Badge](https://img.shields.io/badge/--std%3Dc11-blue?style=plastic&logo=c&logoColor=white&logoSize=auto&labelColor=grey&color=blue)
+
 ## Features
 
 - No expensive mutex locks - cbuf uses C11 atomics for sequential consistency
