@@ -10,6 +10,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define ARR_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
+
 #define TEST_ASSERT(expr, message)                                             \
   do {                                                                         \
     if (!(expr)) {                                                             \
@@ -82,6 +84,5 @@ static inline void test_context_init(test_context_t *ctx, cbuf_t *cbuf,
 static inline void test_context_destroy(test_context_t *ctx) {
   counter_destroy(&ctx->produced);
   counter_destroy(&ctx->consumed);
-  // Ensure no double-free occurs
   ctx->cbuf = NULL;
 }
