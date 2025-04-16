@@ -24,7 +24,7 @@ void have_highres_mono_clock(void) {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     exit(EXIT_FAILURE);
-#else /* _MSC_VER */
+#else /* _WIN32 */
   LARGE_INTEGER foo;
   if ((QueryPerformanceCounter(&foo) == 0) ||
       (QueryPerformanceFrequency(&foo) == 0)) {
@@ -44,8 +44,8 @@ void have_highres_mono_clock(void) {
   ({                                                                           \
     struct timespec ts;                                                        \
     (void)clock_gettime(CLOCK_MONOTONIC, &ts);                                 \
-    int64_t diff = (int64_t)ts.tv_sec*1000 + ts.tv_nsec/1000000;               \
-    (diff);                                                                    \
+    int64_t now = (int64_t)ts.tv_sec*1000 + ts.tv_nsec/1000000;                \
+    (now);                                                                     \
   })
 #else /* _MSC_VER */
 #define cbuf_time_now()                                                        \
