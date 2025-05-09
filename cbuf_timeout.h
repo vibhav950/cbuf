@@ -36,6 +36,7 @@ void have_highres_mono_clock(void) {
 
 /**
  * cbuf_time_now()
+ *
  * @brief Get current time in milleseconds.
  */
 
@@ -63,9 +64,13 @@ void have_highres_mono_clock(void) {
  *
  * @brief Get time elapsed in milliseconds since @p old up until @p new.
  */
-
 #define cbuf_time_diff(new, old) ((new) - (old))
 
+/**
+ * cbuf_timeout_init(timeout, expire_in_msec)
+ *
+ * @brief Set a timeout to expire in @p expire_in_msec milliseconds.
+ */
 INLINE
 void cbuf_timeout_begin(cbuf_timeout_t *timeout, int64_t expire_in_msec) {
   if (likely(timeout)) {
@@ -74,6 +79,11 @@ void cbuf_timeout_begin(cbuf_timeout_t *timeout, int64_t expire_in_msec) {
   }
 }
 
+/**
+ * cbuf_timeout_expired(timeout)
+ *
+ * @brief Check if the timeout has expired.
+ */
 INLINE bool cbuf_timeout_expired(cbuf_timeout_t *timeout) {
   uint64_t now;
   if (likely(timeout)) {
